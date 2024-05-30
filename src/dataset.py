@@ -37,7 +37,7 @@ class FixationDataset(Dataset):
 		fix_name = os.path.join(self.root_dir, self.fixation_files[idx])
 		fix = imageio.imread(fix_name)
 
-		sample = {"image": image, "fixation": fix}
+		sample = {"image": image, "fixation": fix, "raw_image": torch.tensor(image, dtype=torch.float32).permute(2, 0, 1)}
 
 		if self.image_transform:
 			sample["image"] = self.image_transform(sample["image"])

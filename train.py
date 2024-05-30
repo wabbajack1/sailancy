@@ -3,7 +3,7 @@ import imageio
 import os
 import torchvision
 import torch
-from torchvision.transforms import v2
+from torchvision.transforms import v2, ConvertImageDtype
 
 import torch
 import torch.nn as nn
@@ -17,7 +17,11 @@ from src.model import Eye_Fixation
 from src.dataset import FixationDataset
 import wandb
 
-def evaluate(model, data_loader_test, device):
+from torchvision.utils import make_grid
+from torchvision.io import read_image
+
+
+def evaluate(model, data_loader_test, device, args):
     """Here in the evaluation function, we will evaluate the model on the test dataset. We cant calulate 
     the accuracy here as we dont have the ground truth in the test set. Hence we do:
 
@@ -33,9 +37,6 @@ def evaluate(model, data_loader_test, device):
     Returns:
         _type_: _description_
     """
-    correct = 0
-    total = 0
-    loss_val = 0
     # evaluate after each epoch
     with torch.no_grad():
         for images, labels in data_loader_test:
@@ -44,23 +45,13 @@ def evaluate(model, data_loader_test, device):
 
             # model prediction
             pred = model(xb)
-            loss_val += loss_fcn(pred, yb)
-
             predictions = torch.argmax(pred, dim=-1)
 
-            # Update counters
-            total += yb.size(0)
-            correct += (predictions == yb).sum().item()
-
-    # Calculate accuracy
-    accuracy = correct / total
-    print(f"Accuracy: {accuracy:.4f}, Loss: {loss_val/total:.4f}")
-
-    return accuracy
+    
 
 def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device):
      # training loop
-    epochs = epochs
+    
     for epoch in range(epochs):
         model.train()
         print(f"Epoch: {epoch}")
@@ -71,8 +62,6 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
 
             # model prediction
             pred = model(xb)
-            # print(f"Shape of pred: {pred.shape}, Shape of yb: {yb.shape}, Input Shape: {xb.shape}")
-            # print(f"Max value of pred: {torch.max(pred)}, Min value of pred: {torch.min(pred)}, Max value of yb: {torch.max(yb)}, Min value of yb: {torch.min(yb)}, Max value of xb: {torch.max(xb)}, Min value of xb: {torch.min(xb)}")
 
 
             # loss
@@ -82,30 +71,41 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
             optimizer.zero_grad()
 
             if (step+1) % 1 == 0:
+                wandb.log({"training/loss": loss.item()})
                 print(f"Batch Number: {step } -- {len(data_loader_train)}, Loss: {loss.item()}")
+
+                # log 
+                print(one_batch["raw_image"].shape)
+                grid_fix = make_grid(one_batch["fixation"][:9], nrow=4)
+                grid_raw = make_grid(one_batch["raw_image"][:9], nrow=4)
+                grid_prediction = make_grid(torch.sigmoid(pred)[:9], nrow=4)
+                wandb.log({"training/images/tgt_fixation": [wandb.Image(grid_fix)],
+                            "training/images/raw_image": [wandb.Image(grid_raw)],
+                            "training/images/prediction": [wandb.Image(grid_prediction)]}, step=step)
         
         correct = 0
         total = 0
         loss_val = 0
         # evaluate after each epoch
-        # with torch.no_grad():
-        #     for img in data_loader_val:
-        #         xb = img["images"].to(device)
-        #         yb = img["fixation"].to(device)
+        with torch.no_grad():
+            for img in data_loader_val:
+                xb = img["image"].to(device)
+                yb = img["fixation"].to(device)
 
-        #         # model prediction
-        #         pred = model(xb)
-        #         loss_val += loss_fcn(pred, yb)
+                # model prediction
+                pred = model(xb)
+                loss_val += loss_fcn(pred, yb)
 
-        #         predictions = torch.argmax(pred, dim=-1)
+                predictions = torch.argmax(pred, dim=-1)
 
-        #         # Update counters
-        #         total += yb.size(0)
-        #         correct += (predictions == yb).sum().item()
+                # Update counters
+                total += yb.size(0)
+                correct += (predictions == yb).sum().item()
 
         # Calculate accuracy
-        # accuracy = correct / total
-        # print(f"Accuracy: {accuracy:.4f}, Loss: {loss_val/total:.4f}")
+        accuracy = correct / total
+        print(f"Accuracy: {accuracy:.4f}, Loss: {loss_val/total:.4f}")
+        wandb.log({"validation/accuracy": accuracy, "validation/loss": loss_val/total})
 
         print(f"Saving model after epoch {epoch}.")
         # save model after each epoch
@@ -132,11 +132,12 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=bool, default=False,
                     help='Choose device')
     parser.add_argument('--resume_training', type=int, default=None,
-                    help='Choose device')
+                    help='Resume training or not.')
     parser.add_argument('--epochs', type=int, default=10,
                     help='Choose epochs')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser.add_argument('--log', type=bool, default=False, help='Log to wandb')
 
     args = parser.parse_args()
 
@@ -146,9 +147,11 @@ if __name__ == "__main__":
         # track hyperparameters and run metadata
         config={
         "device": args.device,
-        "architecture": args.resume_training,
+        "resume_training": args.resume_training,
         "epochs": args.epochs,
-        }
+        },
+
+        mode = "online" if args.log else "disabled"
     )
 
     
@@ -178,7 +181,7 @@ if __name__ == "__main__":
 
     # Load the dataset
     batch_size_train = args.batch_size
-    batch_size_test = args.batch_size * 2
+    batch_size_val = args.batch_size * 2
 
     # tranformation
     transform = v2.Compose([
@@ -191,21 +194,32 @@ if __name__ == "__main__":
     sailancy_val_dataset = FixationDataset(root_dir="cv2_project_data", image_file="cv2_project_data/val_images.txt", 
 						   fixation_file="cv2_project_data/val_fixations.txt", image_transform=transform, fixation_transform=transform)
 
+    # image and fixation are the same for the test dataset as there is no ground truth (fixation) for the test dataset
+    sailancy_test_dataset = FixationDataset(root_dir="cv2_project_data", image_file="cv2_project_data/test_images.txt", 
+						   fixation_file="cv2_project_data/test_images.txt", image_transform=transform, fixation_transform=transform)
 
     data_loader_train = torch.utils.data.DataLoader(sailancy_train_dataset,
 											batch_size=batch_size_train,
 											shuffle=True)
 
-    one_batch = next(iter(data_loader_train)) # get one batch for testing if the model is working
     
     data_loader_val = torch.utils.data.DataLoader(sailancy_val_dataset,
-											batch_size=batch_size_test,
+											batch_size=batch_size_val,
 											shuffle=False)
     
+    data_loader_test = torch.utils.data.DataLoader(sailancy_test_dataset, 
+                                            batch_size=batch_size_val, 
+                                            shuffle=False)
+    
+    one_batch = next(iter(data_loader_train)) # get one batch for testing if the model is working
 
+    # train the model
     import time
     start_time = time.time()
     train(epochs, model, loss_fcn, optimizer, one_batch, data_loader_val, device)
     end_time = time.time()
+
+    # evaluate the model
+    evaluate(model, data_loader_test, device, args)
 
     print(f"Runtime: {end_time - start_time} seconds")
