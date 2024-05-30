@@ -85,11 +85,13 @@ def evaluate(model, data_loader_test, device, args):
 def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args):
      # training loop
     
+    step = 0
     for epoch in range(epochs):
         model.train()
-        print(f"Epoch: {epoch}")
+        print(f"Epoch: {epoch+1}")
         # for step, (img) in enumerate(data_loader_train): # over the sampling dimension
-        for step in range(1):
+        for _ in range(100):
+            step += 1
             xb = one_batch["image"].to(device) 
             yb = one_batch["fixation"].to(device)
 
@@ -126,7 +128,7 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
                 pred = model(xb)
                 loss_val += loss_fcn(pred, yb)
 
-                predictions = torch.argmax(pred, dim=-1)
+                predictions = torch.max(pred, dim=0)[0]
 
                 # Update counters
                 total += yb.size(0)
@@ -171,6 +173,7 @@ if __name__ == "__main__":
     parser.add_argument('--log', type=bool, default=False, help='Log to wandb')
     parser.add_argument('--log_steps', type=int, default=10, help='Log steps to wandb')
     parser.add_argument('--seed', type=int, default=123, help='Seed for reproducibility')
+    parser.add_argument('--momentum', type=float, default=0.9, help='Opt momentum')
     args = parser.parse_args()
     
     # set seed for reproducibility
@@ -188,7 +191,8 @@ if __name__ == "__main__":
         "lr": args.lr,
         "batch_size": args.batch_size,
         "log": args.log,
-        "log_steps": args.log_steps
+        "log_steps": args.log_steps,
+        "momentum": args.momentum,
         },
 
         mode = "online" if args.log else "disabled"
@@ -206,7 +210,7 @@ if __name__ == "__main__":
         checkpoint = torch.load(f"sailancy_model/sailancy_model_epoch_{args.resume_training}.pt")
         model = Eye_Fixation()
         model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer = optim.SGD(model.parameters(), lr=checkpoint['lr'], momentum=0.9)
+        optimizer = optim.SGD(model.parameters(), lr=checkpoint['lr'], momentum=args.momentum)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         model = model.to(device)
         epochs = args.epochs - checkpoint['epoch']
@@ -217,7 +221,7 @@ if __name__ == "__main__":
 
     # create loss and optimizer
     loss_fcn = F.binary_cross_entropy_with_logits
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
     # Load the dataset
     batch_size_train = args.batch_size
