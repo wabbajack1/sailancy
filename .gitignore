@@ -1,0 +1,5 @@
+cv2_project_data
+cv2_training_data
+cv2_validation_data
+sailancy_model
+wandb
