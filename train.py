@@ -4,7 +4,7 @@ import os
 import torchvision
 import torch
 from torchvision.transforms import v2, ConvertImageDtype
-
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,6 +20,12 @@ import wandb
 from torchvision.utils import make_grid
 from torchvision.io import read_image
 
+
+def seed(seed=42):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def evaluate(model, data_loader_test, device, args):
     """Here in the evaluation function, we will evaluate the model on the test dataset. We cant calulate 
@@ -61,7 +67,7 @@ def evaluate(model, data_loader_test, device, args):
         new_filename = f"predictions/prediction-{base_name}.png"
         
         # Convert the prediction to a numpy array and save it as an image
-        imageio.imwrite(new_filename, pred.numpy())
+        imageio.imwrite(new_filename, pred.cpu().numpy())
 
 
     
