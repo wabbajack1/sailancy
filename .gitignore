@@ -4,3 +4,4 @@ cv2_validation_data
 sailancy_model
 wandb
 src/__pycache__/
+predictions/
