@@ -37,19 +37,36 @@ def evaluate(model, data_loader_test, device, args):
     Returns:
         _type_: _description_
     """
+    model.eval()
+    predictions_list = []
     # evaluate after each epoch
     with torch.no_grad():
-        for images, labels in data_loader_test:
-            xb = images.to(device)
-            yb = labels.to(device)
+        for img in data_loader_test:
+            xb = img["image"].to(device)
 
             # model prediction
             pred = model(xb)
             predictions = torch.argmax(pred, dim=-1)
+            predictions_list.append(predictions)
+    
+    # Get the list of image filenames from the dataset
+    image_file_names = data_loader_test.dataset.image_files
+    
+    # Iterate through the predictions and save them with the appropriate filename
+    for i, pred in enumerate(predictions):
+        # Extract the base name from the original image file name (without extension)
+        base_name = os.path.splitext(os.path.basename(image_file_names[i]))[0]
+        
+        # Construct the new filename using the base name
+        new_filename = f"predictions/prediction-{base_name}.png"
+        
+        # Convert the prediction to a numpy array and save it as an image
+        imageio.imwrite(new_filename, pred.numpy())
+
 
     
 
-def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device):
+def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args):
      # training loop
     
     for epoch in range(epochs):
@@ -63,23 +80,20 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
             # model prediction
             pred = model(xb)
 
-
             # loss
             loss = loss_fcn(pred, yb)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
 
-            if (step+1) % 1 == 0:
-                wandb.log({"training/loss": loss.item()})
-                print(f"Batch Number: {step } -- {len(data_loader_train)}, Loss: {loss.item()}")
-
-                # log 
-                print(one_batch["raw_image"].shape)
-                grid_fix = make_grid(one_batch["fixation"][:9], nrow=4)
-                grid_raw = make_grid(one_batch["raw_image"][:9], nrow=4)
-                grid_prediction = make_grid(torch.sigmoid(pred)[:9], nrow=4)
-                wandb.log({"training/images/tgt_fixation": [wandb.Image(grid_fix)],
+            if (step+1) % args.log_steps == 0:
+                print("Step:", step, "Loss:", loss.item())
+                # log in wandb
+                grid_fix = make_grid(one_batch["fixation"][:8], nrow=4)
+                grid_raw = make_grid(one_batch["raw_image"][:8], nrow=4)
+                grid_prediction = make_grid(torch.sigmoid(pred)[:8], nrow=4)
+                wandb.log({"training/loss": loss.item(),
+                            "training/images/tgt_fixation": [wandb.Image(grid_fix)],
                             "training/images/raw_image": [wandb.Image(grid_raw)],
                             "training/images/prediction": [wandb.Image(grid_prediction)]}, step=step)
         
@@ -122,6 +136,7 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
 if __name__ == "__main__":
     # create directory to save model
     os.makedirs("sailancy_model", exist_ok=True)
+    os.makedirs("predictions", exist_ok=True)
 
     # parse args
     parser = argparse.ArgumentParser(
@@ -138,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--log', type=bool, default=False, help='Log to wandb')
+    parser.add_argument('--log_steps', type=int, default=10, help='Log steps to wandb')
 
     args = parser.parse_args()
 
@@ -149,6 +165,10 @@ if __name__ == "__main__":
         "device": args.device,
         "resume_training": args.resume_training,
         "epochs": args.epochs,
+        "lr": args.lr,
+        "batch_size": args.batch_size,
+        "log": args.log,
+        "log_steps": args.log_steps
         },
 
         mode = "online" if args.log else "disabled"
@@ -216,7 +236,7 @@ if __name__ == "__main__":
     # train the model
     import time
     start_time = time.time()
-    train(epochs, model, loss_fcn, optimizer, one_batch, data_loader_val, device)
+    train(epochs, model, loss_fcn, optimizer, one_batch, data_loader_val, device, args)
     end_time = time.time()
 
     # evaluate the model

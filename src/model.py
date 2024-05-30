@@ -1,7 +1,7 @@
 import torch
 from torchvision.models.segmentation import fcn_resnet50
 import numpy as np
-
+import wandb
 
 def gaussian(window_size: int, sigma: float) -> torch.Tensor:
     device, dtype = None, None
@@ -19,7 +19,11 @@ class Eye_Fixation(torch.nn.Module):
         super(Eye_Fixation, self).__init__()
 
         # Freeze the backbone
-        self.model = fcn_resnet50(pretrained=False, num_classes=1, pretrained_backbone=True) # load the pre-trained model
+        self.model = fcn_resnet50(pretrained=True) # load the pre-trained model
+        
+        # Modify the final classifier to have the desired number of classes
+        self.model.classifier[4] = torch.nn.Conv2d(512, 1, kernel_size=(1, 1), stride=(1, 1))
+        
         for param in self.model.backbone.parameters():
             param.requires_grad = False
 
@@ -37,6 +41,11 @@ class Eye_Fixation(torch.nn.Module):
         center_bias = torch.tensor(np.load('cv2_project_data/center_bias_density.npy'))
         log_center_bias = torch.log(center_bias)
         self.center_bias = torch.nn.Parameter(log_center_bias)  # 224 depends on the input size
+
+        try:
+            wandb.watch(self, log="all", log_freq=100)
+        except:
+            pass
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x_features = self.backbone(x)["out"]
