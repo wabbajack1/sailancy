@@ -3,4 +3,4 @@ cv2_training_data
 cv2_validation_data
 sailancy_model
 wandb
-src/__pycache__
+src/__pycache__/
