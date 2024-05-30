@@ -52,28 +52,33 @@ def evaluate(model, data_loader_test, device, args):
 
             # model prediction
             pred = model(xb)
-            print(pred.shape)
             predictions = torch.max(pred, dim=0, keepdim=True)[0] # across the batch dimension
-            print(predictions.shape)
-            predictions_list.append(ConvertImageDtype(torch.uint8)(torch.sigmoid(predictions.squeeze(0))*255)) # to sigmoid
-            break
+
+            predictions = predictions - predictions.min()
+            max_pred = predictions / predictions.max() * 255.0
+
+            max_pred = max_pred.byte()
+            predictions_list.append(max_pred) # to sigmoid
     
     # Get the list of image filenames from the dataset
     image_file_names = data_loader_test.dataset.image_files
     predictions_list = torch.cat(predictions_list, dim=0)
     
     # Iterate through the predictions and save them with the appropriate filename
-    for i, pred in enumerate(predictions_list):
+    for step, pred in enumerate(predictions_list):
         # Extract the base name from the original image file name (without extension)
-        base_name = os.path.splitext(os.path.basename(image_file_names[i]))[0]
+        base_name = os.path.splitext(os.path.basename(image_file_names[step]))[0]
         
         # Construct the new filename using the base name
         new_filename = f"predictions/prediction-{base_name}.png"
         
         # Convert the prediction to a numpy array and save it as an image
-        print(pred.cpu().numpy(), pred.cpu().numpy().shape)
-        imageio.imwrite(new_filename, pred.cpu().numpy())
+        imageio.imwrite(new_filename, pred.squeeze(0).cpu().numpy())
 
+        # Log the predictions to wandb
+        pred = pred.float() # convert to float for visualization
+        grid_pred = make_grid(pred.unsqueeze(0), nrow=1) # make grid out of one image
+        wandb.log({"eval/images": [wandb.Image(grid_pred, caption=new_filename)]}, step=step) # log the image to wandb
 
     
 
@@ -243,7 +248,7 @@ if __name__ == "__main__":
 											shuffle=False)
     
     data_loader_test = torch.utils.data.DataLoader(sailancy_test_dataset, 
-                                            batch_size=batch_size_val, 
+                                            batch_size=1, 
                                             shuffle=False)
     
     one_batch = next(iter(data_loader_train)) # get one batch for testing if the model is working
