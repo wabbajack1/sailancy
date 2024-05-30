@@ -52,14 +52,18 @@ def evaluate(model, data_loader_test, device, args):
 
             # model prediction
             pred = model(xb)
-            predictions = torch.argmax(pred, dim=-1)
-            predictions_list.append(predictions)
+            print(pred.shape)
+            predictions = torch.max(pred, dim=0, keepdim=True)[0] # across the batch dimension
+            print(predictions.shape)
+            predictions_list.append(ConvertImageDtype(torch.uint8)(torch.sigmoid(predictions.squeeze(0))*255)) # to sigmoid
+            break
     
     # Get the list of image filenames from the dataset
     image_file_names = data_loader_test.dataset.image_files
+    predictions_list = torch.cat(predictions_list, dim=0)
     
     # Iterate through the predictions and save them with the appropriate filename
-    for i, pred in enumerate(predictions):
+    for i, pred in enumerate(predictions_list):
         # Extract the base name from the original image file name (without extension)
         base_name = os.path.splitext(os.path.basename(image_file_names[i]))[0]
         
@@ -67,6 +71,7 @@ def evaluate(model, data_loader_test, device, args):
         new_filename = f"predictions/prediction-{base_name}.png"
         
         # Convert the prediction to a numpy array and save it as an image
+        print(pred.cpu().numpy(), pred.cpu().numpy().shape)
         imageio.imwrite(new_filename, pred.cpu().numpy())
 
 
@@ -79,7 +84,7 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
         model.train()
         print(f"Epoch: {epoch}")
         # for step, (img) in enumerate(data_loader_train): # over the sampling dimension
-        for step in range(0, len(data_loader_train)):
+        for step in range(1):
             xb = one_batch["image"].to(device) 
             yb = one_batch["fixation"].to(device)
 
@@ -160,8 +165,12 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--log', type=bool, default=False, help='Log to wandb')
     parser.add_argument('--log_steps', type=int, default=10, help='Log steps to wandb')
-
+    parser.add_argument('--seed', type=int, default=123, help='Seed for reproducibility')
     args = parser.parse_args()
+    
+    # set seed for reproducibility
+    seed(args.seed)
+
 
     wandb.init(
         project="Saliency-map",
