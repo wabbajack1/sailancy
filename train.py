@@ -19,13 +19,39 @@ import wandb
 
 from torchvision.utils import make_grid
 from torchvision.io import read_image
-
+from sklearn.metrics import roc_curve, auc
 
 def seed(seed=42):
     torch.manual_seed(seed)
     np.random.seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+def compute_auc(saliency_map, ground_truth, threshold=None):
+    """
+    Compute the Area Under the ROC Curve (AUC) for a saliency map. Salary maps and ground truth are expected to be in the same scale, i.e. [0, 1].
+
+    Args:
+    saliency_map (torch.Tensor): Predicted saliency map.
+    ground_truth (torch.Tensor): Ground truth saliency map (continuous values).
+
+    Returns:
+    float: AUC score.
+    """
+    # Flatten the saliency map and ground truth
+    saliency_map_flat = saliency_map.view(-1).cpu().detach().numpy()
+    ground_truth_flat = ground_truth.view(-1).cpu().detach().numpy()
+
+    # Compute the threshold for the ground truth
+    if threshold is None:
+        threshold = ground_truth_flat.mean().item()
+    binary_ground_truth = (ground_truth_flat >= threshold).astype(float)
+
+    # Compute ROC curve and AUC
+    fpr, tpr, thresholds = roc_curve(binary_ground_truth, saliency_map_flat)
+    auc_score = auc(fpr, tpr)
+
+    return auc_score
 
 def evaluate(model, data_loader_test, device, args):
     """Here in the evaluation function, we will evaluate the model on the test dataset. We cant calulate 
@@ -54,6 +80,7 @@ def evaluate(model, data_loader_test, device, args):
             pred = model(xb)
             predictions = torch.max(pred, dim=0, keepdim=True)[0] # across the batch dimension
 
+            # normalize the predictions
             predictions = predictions - predictions.min()
             max_pred = predictions / predictions.max() * 255.0
 
@@ -90,6 +117,7 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
         model.train()
         print(f"Epoch: {epoch+1}")
         # for step, (img) in enumerate(data_loader_train): # over the sampling dimension
+
         for _ in range(100):
             step += 1
             xb = one_batch["image"].to(device) 
@@ -104,8 +132,10 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
             optimizer.step()
             optimizer.zero_grad()
 
+            auc_score = compute_auc(torch.sigmoid(pred), yb)
+
             if (step+1) % args.log_steps == 0:
-                print("Step:", step, "Loss:", loss.item())
+                print("Step:", step, "Loss:", loss.item(), "Accuracy:", auc_score)
                 # log in wandb
                 grid_fix = make_grid(one_batch["fixation"][:8], nrow=4)
                 grid_raw = make_grid(one_batch["raw_image"][:8], nrow=4)
