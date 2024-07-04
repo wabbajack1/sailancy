@@ -38,7 +38,7 @@ class Eye_Fixation(torch.nn.Module):
         self.weight_kernel = torch.nn.Parameter(gaussian(window_size, sigma), requires_grad=False) # (window_size, window_size)
 
         # Center bias for post-processing
-        center_bias = torch.tensor(np.load('cv2_project_data/center_bias_density.npy'))
+        center_bias = torch.tensor(np.load('/export/scratch/CV2//center_bias_density.npy'))
         log_center_bias = torch.log(center_bias)
         self.center_bias = torch.nn.Parameter(log_center_bias)  # 224 depends on the input size
 

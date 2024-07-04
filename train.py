@@ -21,7 +21,30 @@ import wandb
 from torchvision.utils import make_grid
 from torchvision.io import read_image
 from sklearn.metrics import roc_curve, auc
+from tqdm import tqdm
+import os
 
+from logging import getLogger
+import logging
+
+# make a logger
+logger = getLogger(__name__)
+# Set up logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Create console handler and set level to INFO
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+
+# Add console handler to logger
+logger.addHandler(console_handler)
+
+# set seed for reproducibility
 def seed(seed=42):
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -160,7 +183,7 @@ def evaluate(model, data_loader_test, device, args):
     predictions_list = []
     # evaluate after each epoch
     with torch.no_grad():
-        for img in data_loader_test:
+        for img in tqdm(data_loader_test):
             xb = img["image"].to(device)
 
             # model prediction
@@ -179,12 +202,12 @@ def evaluate(model, data_loader_test, device, args):
     predictions_list = torch.cat(predictions_list, dim=0)
     
     # Iterate through the predictions and save them with the appropriate filename
-    for step, pred in enumerate(predictions_list):
+    for step, pred in enumerate(tqdm(predictions_list)):
         # Extract the base name from the original image file name (without extension)
         base_name = os.path.splitext(os.path.basename(image_file_names[step]))[0]
         
         # Construct the new filename using the base name
-        new_filename = f"predictions/prediction-{base_name}.png"
+        new_filename = f"/export/scratch/9erekmen/predictions/prediction-{base_name}.png"
         
         # Convert the prediction to a numpy array and save it as an image
         imageio.imwrite(new_filename, pred.squeeze(0).cpu().numpy()) # pred (1, 1, H, W)
@@ -196,7 +219,7 @@ def evaluate(model, data_loader_test, device, args):
 
     
 
-def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args):
+def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger):
      # training loop
     
     step = 0
@@ -205,7 +228,7 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
         print(f"Epoch: {epoch+1}")
 
         # for _ in range(100):
-        for _, (img) in enumerate(data_loader_train): # over the sampling dimension
+        for _, (img) in enumerate(tqdm(data_loader_train)): # over the sampling dimension
             step += 1
             xb = img["image"].to(device) 
             yb = img["fixation"].to(device)
@@ -240,8 +263,9 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
         total = 0
         loss_val = 0
         # evaluate after each epoch
+        logger.info("Validation of the model.")
         with torch.no_grad():
-            for img in data_loader_val:
+            for img in tqdm(data_loader_val):
                 xb = img["image"].to(device)
                 yb = img["fixation"].to(device)
 
@@ -253,17 +277,17 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
 
                 # compute accuracy (AUC)
                 # auc_score = compute_auc(torch.sigmoid(pred), yb)
-                auc_score = AUC_Judd(pred.cpu().detach(), yb.cpu().detach(), jitter=True, toPlot=False)
-
+                # auc_score = AUC_Judd(pred.cpu().detach(), yb.cpu().detach(), jitter=True, toPlot=False)
 
                 # Update counters
                 total += yb.size(0)
                 correct += (predictions == yb).sum().item()
 
+
         # Calculate accuracy
         accuracy = correct / total
         print(f"Accuracy: {accuracy:.4f}, Loss: {loss_val/total:.4f}")
-        wandb.log({"validation/accuracy": accuracy, "validation/loss": loss_val/total, "validation/auc": auc_score, "epoch": epoch+1}, step=step)
+        wandb.log({"validation/accuracy": accuracy, "validation/loss": loss_val/total, "validation/auc": 0, "epoch": epoch+1}, step=step)
 
         print(f"Saving model after epoch {epoch}.")
         # save model after each epoch
@@ -273,14 +297,14 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'lr': optimizer.param_groups[0]['lr'],
-            }, f"sailancy_model/sailancy_model_epoch_{epoch}.pt"
+            }, f"/export/scratch/9erekmen/sailancy_model/sailancy_model_epoch_{epoch}.pt"
         )
 
 
 if __name__ == "__main__":
     # create directory to save model
-    os.makedirs("sailancy_model", exist_ok=True)
-    os.makedirs("predictions", exist_ok=True)
+    os.makedirs("/export/scratch/9erekmen/sailancy_model", exist_ok=True)
+    os.makedirs("/export/scratch/9erekmen/predictions", exist_ok=True)
 
     # parse args
     parser = argparse.ArgumentParser(
@@ -288,8 +312,8 @@ if __name__ == "__main__":
                     description='Train sailancy model.',
                     epilog='Choose device.')
     
-    parser.add_argument('--device', type=bool, default=False,
-                    help='Choose device')
+    parser.add_argument('--device', type=str, default=False,
+                    help='Choose device: cuda | mps | cpu.')
     parser.add_argument('--resume_training', type=int, default=None,
                     help='Resume training or not.')
     parser.add_argument('--epochs', type=int, default=10,
@@ -300,6 +324,7 @@ if __name__ == "__main__":
     parser.add_argument('--log_steps', type=int, default=10, help='Log steps to wandb')
     parser.add_argument('--seed', type=int, default=123, help='Seed for reproducibility')
     parser.add_argument('--momentum', type=float, default=0.9, help='Opt momentum')
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for dataloader")
     args = parser.parse_args()
     
     # set seed for reproducibility
@@ -319,21 +344,29 @@ if __name__ == "__main__":
         "log": args.log,
         "log_steps": args.log_steps,
         "momentum": args.momentum,
+        "seed": args.seed,
+        "num_workers": args.num_workers
         },
 
         mode = "online" if args.log else "disabled"
     )
 
     
-    # choose backend
-    device = "mps" if (torch.backends.mps.is_available() and args.device) else "cpu"
+    # choose backend between mps or cuda
+    if args.device == "mps":
+        device = "mps" if (torch.backends.mps.is_available() and args.device) else "cpu"
+    elif args.device == "cuda":
+        device = "cuda" if (torch.cuda.is_available() and args.device) else "cpu"
+    else:
+        device = "cpu"
+
     print("Model backend:", device)
 
 
     # load model, optimizer and state dict
     if args.resume_training is not None: 
         print(f"Resuming training from epoch: {args.resume_training}; Loading Model: sailancy_model_epoch_{args.resume_training}")
-        checkpoint = torch.load(f"sailancy_model/sailancy_model_epoch_{args.resume_training}.pt")
+        checkpoint = torch.load(f"/export/scratch/9erekmen/sailancy_model/sailancy_model_epoch_{args.resume_training}.pt")
         model = Eye_Fixation()
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer = optim.SGD(model.parameters(), lr=checkpoint['lr'], momentum=args.momentum)
@@ -358,38 +391,48 @@ if __name__ == "__main__":
         v2.ToTensor() # convert the image to a tensor with values between 0 and 1
     ])
 
-    sailancy_train_dataset = FixationDataset(root_dir="cv2_project_data", image_file="cv2_project_data/train_images.txt", 
-						   fixation_file="cv2_project_data/train_fixations.txt", image_transform=transform, fixation_transform=transform)
+    sailancy_train_dataset = FixationDataset(root_dir="/export/scratch/CV2", image_file="/export/scratch/CV2/train_images.txt", 
+						   fixation_file="/export/scratch/CV2/train_fixations.txt", image_transform=transform, fixation_transform=transform)
     
-    sailancy_val_dataset = FixationDataset(root_dir="cv2_project_data", image_file="cv2_project_data/val_images.txt", 
-						   fixation_file="cv2_project_data/val_fixations.txt", image_transform=transform, fixation_transform=transform)
+    sailancy_val_dataset = FixationDataset(root_dir="/export/scratch/CV2", image_file="/export/scratch/CV2/val_images.txt", 
+						   fixation_file="/export/scratch/CV2/val_fixations.txt", image_transform=transform, fixation_transform=transform)
 
     # image and fixation are the same for the test dataset as there is no ground truth (fixation) for the test dataset
-    sailancy_test_dataset = FixationDataset(root_dir="cv2_project_data", image_file="cv2_project_data/test_images.txt", 
-						   fixation_file="cv2_project_data/test_images.txt", image_transform=transform, fixation_transform=transform)
+    sailancy_test_dataset = FixationDataset(root_dir="/export/scratch/CV2", image_file="/export/scratch/CV2/test_images.txt", 
+						   fixation_file="/export/scratch/CV2/test_images.txt", image_transform=transform, fixation_transform=transform)
 
+    
+    assert args.num_workers < os.cpu_count(), "Number of workers cannot be more than the number of cores available and should be less than the number of cores available, because of balancing the load (cpu and gpu usage)."
     data_loader_train = torch.utils.data.DataLoader(sailancy_train_dataset,
 											batch_size=batch_size_train,
-											shuffle=True)
+											shuffle=True, num_workers=args.num_workers)
 
     
     data_loader_val = torch.utils.data.DataLoader(sailancy_val_dataset,
 											batch_size=batch_size_val,
-											shuffle=False)
+											shuffle=False, num_workers=args.num_workers)
     
     data_loader_test = torch.utils.data.DataLoader(sailancy_test_dataset, 
                                             batch_size=1, 
-                                            shuffle=False)
+                                            shuffle=False, num_workers=args.num_workers)
     
     one_batch = next(iter(data_loader_train)) # get one batch for testing if the model is working
 
+    # size of dataloaders
+    logger.info(f"Size of train dataloader: {len(data_loader_train)} Batches")
+    logger.info(f"Size of val dataloader: {len(data_loader_val)} Batches")
+    logger.info(f"Size of test dataloader: {len(data_loader_test)} Batches")
+    logger.info(f"Number of cores for dataloader: {data_loader_train.num_workers}")
+
     # train the model
     import time
+    logger.info("Training the model.")
     start_time = time.time()
-    train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args)
+    train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger)
     end_time = time.time()
 
     # evaluate the model
+    logger.info("Evaluating the model.")
     evaluate(model, data_loader_test, device, args)
 
     print(f"Runtime: {end_time - start_time} seconds")
