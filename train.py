@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 import torch.optim as optim
+from PIL import Image
 
 import argparse
 from src.model import Eye_Fixation
@@ -39,19 +40,105 @@ def compute_auc(saliency_map, ground_truth, threshold=None):
     float: AUC score.
     """
     # Flatten the saliency map and ground truth
+    print(saliency_map.shape, ground_truth.shape)
     saliency_map_flat = saliency_map.view(-1).cpu().detach().numpy()
     ground_truth_flat = ground_truth.view(-1).cpu().detach().numpy()
 
     # Compute the threshold for the ground truth
-    if threshold is None:
-        threshold = ground_truth_flat.mean().item()
-    binary_ground_truth = (ground_truth_flat >= threshold).astype(float)
+    # if threshold is None:
+    #     threshold = ground_truth_flat.mean().item()
+    # binary_ground_truth = (ground_truth_flat >= threshold).astype(float)
 
     # Compute ROC curve and AUC
-    fpr, tpr, thresholds = roc_curve(binary_ground_truth, saliency_map_flat)
+    fpr, tpr, thresholds = roc_curve(ground_truth_flat, saliency_map_flat)
     auc_score = auc(fpr, tpr)
 
     return auc_score
+
+def AUC_Judd(saliencyMap, fixationMap, jitter=True, toPlot=False):
+    # saliencyMap is the saliency map
+    # fixationMap is the human fixation map (binary matrix)
+    # jitter=True will add tiny non-zero random constant to all map locations to ensure
+    # 		ROC can be calculated robustly (to avoid uniform region)
+    # if toPlot=True, displays ROC curve
+
+    # If there are no fixations to predict, return NaN
+    if not fixationMap.any():
+        print('Error: no fixationMap')
+        score = float('nan')
+        return score
+
+    # make the saliencyMap the size of the image of fixationMap
+    new_size = np.shape(fixationMap)
+    if not np.shape(saliencyMap) == np.shape(fixationMap):
+        #from scipy.misc import imresize
+        new_size = np.shape(fixationMap)
+        np.array(Image.fromarray(saliencyMap).resize((new_size[1], new_size[0])))
+
+        #saliencyMap = imresize(saliencyMap, np.shape(fixationMap))
+
+    # jitter saliency maps that come from saliency models that have a lot of zero values.
+    # If the saliency map is made with a Gaussian then it does not need to be jittered as
+    # the values are varied and there is not a large patch of the same value. In fact
+    # jittering breaks the ordering in the small values!
+    if jitter:
+        # jitter the saliency map slightly to distrupt ties of the same numbers
+        saliencyMap = saliencyMap + np.random.random(np.shape(saliencyMap)) / 10 ** 7
+
+    # normalize saliency map
+    saliencyMap = (saliencyMap - saliencyMap.min()) \
+                  / (saliencyMap.max() - saliencyMap.min())
+
+    if np.isnan(saliencyMap).all():
+        print('NaN saliencyMap')
+        score = float('nan')
+        return score
+
+    S = saliencyMap.flatten()
+    F = fixationMap.flatten()
+
+    Sth = S[F > 0]  # sal map values at fixation locations
+    Nfixations = len(Sth)
+    Npixels = len(S)
+
+    allthreshes = sorted(Sth, reverse=True)  # sort sal map values, to sweep through values
+    tp = np.zeros((Nfixations + 2))
+    fp = np.zeros((Nfixations + 2))
+    tp[0], tp[-1] = 0, 1
+    fp[0], fp[-1] = 0, 1
+
+    for i in range(Nfixations):
+        thresh = allthreshes[i]
+        aboveth = (S >= thresh).sum()  # total number of sal map values above threshold
+        tp[i + 1] = float(i + 1) / Nfixations  # ratio sal map values at fixation locations
+        # above threshold
+        fp[i + 1] = float(aboveth - i) / (Npixels - Nfixations)  # ratio other sal map values
+        # above threshold
+
+    score = np.trapz(tp, x=fp)
+    allthreshes = np.insert(allthreshes, 0, 0)
+    allthreshes = np.append(allthreshes, 1)
+
+    if toPlot:
+        import matplotlib.pyplot as plt
+        fig = plt.figure()
+        ax = fig.add_subplot(1, 2, 1)
+        ax.matshow(saliencyMap, cmap='gray')
+        ax.set_title('SaliencyMap with fixations to be predicted')
+        [y, x] = np.nonzero(fixationMap)
+        s = np.shape(saliencyMap)
+        plt.axis((-.5, s[1] - .5, s[0] - .5, -.5))
+        plt.plot(x, y, 'ro')
+
+        ax = fig.add_subplot(1, 2, 2)
+        plt.plot(fp, tp, '.b-')
+        ax.set_title('Area under ROC curve: ' + str(score))
+        plt.axis((0, 1, 0, 1))
+        plt.show()
+
+    return score
+
+
 
 def evaluate(model, data_loader_test, device, args):
     """Here in the evaluation function, we will evaluate the model on the test dataset. We cant calulate 
@@ -100,7 +187,7 @@ def evaluate(model, data_loader_test, device, args):
         new_filename = f"predictions/prediction-{base_name}.png"
         
         # Convert the prediction to a numpy array and save it as an image
-        imageio.imwrite(new_filename, pred.squeeze(0).cpu().numpy())
+        imageio.imwrite(new_filename, pred.squeeze(0).cpu().numpy()) # pred (1, 1, H, W)
 
         # Log the predictions to wandb
         pred = pred.float() # convert to float for visualization
@@ -116,12 +203,12 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
     for epoch in range(epochs):
         model.train()
         print(f"Epoch: {epoch+1}")
-        # for step, (img) in enumerate(data_loader_train): # over the sampling dimension
 
-        for _ in range(100):
+        # for _ in range(100):
+        for _, (img) in enumerate(data_loader_train): # over the sampling dimension
             step += 1
-            xb = one_batch["image"].to(device) 
-            yb = one_batch["fixation"].to(device)
+            xb = img["image"].to(device) 
+            yb = img["fixation"].to(device)
 
             # model prediction
             pred = model(xb)
@@ -132,13 +219,17 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
             optimizer.step()
             optimizer.zero_grad()
 
-            auc_score = compute_auc(torch.sigmoid(pred), yb)
+            # compute accuracy (AUC)
+            # auc_score = compute_auc(torch.sigmoid(pred), yb)
+            # auc_score = AUC_Judd(pred.cpu().detach(), yb.cpu().detach(), jitter=True, toPlot=False)
+            # print(auc_score)
 
             if (step+1) % args.log_steps == 0:
-                print("Step:", step, "Loss:", loss.item(), "Accuracy:", auc_score)
+                print("Step:", step, "Loss:", loss.item())
+                
                 # log in wandb
-                grid_fix = make_grid(one_batch["fixation"][:8], nrow=4)
-                grid_raw = make_grid(one_batch["raw_image"][:8], nrow=4)
+                grid_fix = make_grid(img["fixation"][:8], nrow=4)
+                grid_raw = make_grid(img["raw_image"][:8], nrow=4)
                 grid_prediction = make_grid(torch.sigmoid(pred)[:8], nrow=4)
                 wandb.log({"training/loss": loss.item(),
                             "training/images/tgt_fixation": [wandb.Image(grid_fix)],
@@ -160,6 +251,11 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
 
                 predictions = torch.max(pred, dim=0)[0]
 
+                # compute accuracy (AUC)
+                # auc_score = compute_auc(torch.sigmoid(pred), yb)
+                auc_score = AUC_Judd(pred.cpu().detach(), yb.cpu().detach(), jitter=True, toPlot=False)
+
+
                 # Update counters
                 total += yb.size(0)
                 correct += (predictions == yb).sum().item()
@@ -167,7 +263,7 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
         # Calculate accuracy
         accuracy = correct / total
         print(f"Accuracy: {accuracy:.4f}, Loss: {loss_val/total:.4f}")
-        wandb.log({"validation/accuracy": accuracy, "validation/loss": loss_val/total})
+        wandb.log({"validation/accuracy": accuracy, "validation/loss": loss_val/total, "validation/auc": auc_score, "epoch": epoch+1}, step=step)
 
         print(f"Saving model after epoch {epoch}.")
         # save model after each epoch
@@ -290,7 +386,7 @@ if __name__ == "__main__":
     # train the model
     import time
     start_time = time.time()
-    train(epochs, model, loss_fcn, optimizer, one_batch, data_loader_val, device, args)
+    train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args)
     end_time = time.time()
 
     # evaluate the model
