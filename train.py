@@ -291,7 +291,7 @@ if __name__ == "__main__":
         model = model.to(device)
         epochs = args.epochs - checkpoint['epoch']
     else: # create instance of model
-        model = Eye_Fixation(args=args)
+        model = Eye_Fixation(args=args, path=remote_path_data)
         model = model.to(device)
         epochs = args.epochs
 
