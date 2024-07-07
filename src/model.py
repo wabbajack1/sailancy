@@ -2,7 +2,7 @@ import torch
 from torchvision.models.segmentation import fcn_resnet50
 import numpy as np
 import wandb
-
+import os
 def gaussian(window_size: int, sigma: float) -> torch.Tensor:
     device, dtype = None, None
     if isinstance(sigma, torch.Tensor):
@@ -15,11 +15,12 @@ def gaussian(window_size: int, sigma: float) -> torch.Tensor:
 
 
 class Eye_Fixation(torch.nn.Module):
-    def __init__(self, window_size:int = 25, sigma:float = 11.2):
+    def __init__(self, args, window_size:int = 25, sigma:float = 11.2, path="cv2_project_data"):
         super(Eye_Fixation, self).__init__()
 
         # Freeze the backbone
         self.model = fcn_resnet50(pretrained=True) # load the pre-trained model
+        self.dropout = torch.nn.Dropout(args.dropout_rate)
         
         # Modify the final classifier to have the desired number of classes
         self.model.classifier[4] = torch.nn.Conv2d(512, 1, kernel_size=(1, 1), stride=(1, 1))
@@ -38,7 +39,7 @@ class Eye_Fixation(torch.nn.Module):
         self.weight_kernel = torch.nn.Parameter(gaussian(window_size, sigma), requires_grad=False) # (window_size, window_size)
 
         # Center bias for post-processing
-        center_bias = torch.tensor(np.load('/export/scratch/CV2//center_bias_density.npy'))
+        center_bias = torch.tensor(np.load(os.path.join(path, "center_bias_density.npy")))
         log_center_bias = torch.log(center_bias)
         self.center_bias = torch.nn.Parameter(log_center_bias)  # 224 depends on the input size
 
@@ -49,7 +50,9 @@ class Eye_Fixation(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x_features = self.backbone(x)["out"]
+        x_features = self.dropout(x_features)
         x_decoded = self.decoder(x_features) # (B, 1, H/8, W/8)
+        x_features = self.dropout(x_features)
         x = torch.nn.functional.interpolate(x_decoded, size=x.shape[-2:], mode='bilinear', align_corners=False)
 
         # post-processing raw decoder outputs

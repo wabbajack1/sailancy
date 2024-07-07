@@ -88,7 +88,7 @@ def auc_borji(s_map,gt,splits=100,stepsize=0.1):
 	gt = discretize_gt(gt)
 	num_fixations = np.sum(gt)
 
-	num_pixels = s_map.shape[0]*s_map.shape[1]
+	num_pixels = s_map.shape[2]*s_map.shape[3]
 	random_numbers = []
 	for i in range(0,splits):
 		temp_list = []
@@ -134,7 +134,7 @@ def auc_borji(s_map,gt,splits=100,stepsize=0.1):
 	return np.mean(aucs)
 
 
-def auc_shuff(s_map,gt,other_map,splits=100,stepsize=0.1):
+def auc_shuff(s_map,gt,other_map,splits=10,stepsize=0.1):
 	gt = discretize_gt(gt)
 	other_map = discretize_gt(other_map)
 

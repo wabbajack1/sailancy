@@ -54,7 +54,7 @@ def seed(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
-def evaluate(model, data_loader_test, device, args):
+def evaluate(model, data_loader_test, device, args, path):
     """Here in the evaluation function, we will evaluate the model on the test dataset. We cant calulate 
     the accuracy here as we dont have the ground truth in the test set. Hence we do:
 
@@ -98,7 +98,7 @@ def evaluate(model, data_loader_test, device, args):
         base_name = os.path.splitext(os.path.basename(image_file_names[step]))[0]
         
         # Construct the new filename using the base name
-        new_filename = f"/export/scratch/9erekmen/predictions/prediction-{base_name}.png"
+        new_filename = os.path.join(path, "predictions/prediction-{base_name}.png")
         
         # Convert the prediction to a numpy array and save it as an image
         imageio.imwrite(new_filename, pred.squeeze(0).cpu().numpy()) # pred (1, 1, H, W)
@@ -110,7 +110,7 @@ def evaluate(model, data_loader_test, device, args):
 
     
 
-def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger):
+def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger, path):
      # training loop
     
     step = 0
@@ -165,16 +165,18 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
                     pred = model(xb)
                     loss_val += loss_fcn(pred, yb)
 
-                    _, predictions = torch.max(pred, dim=1)
+                    pred_flat = pred.view(pred.shape[0], -1)
+                    yb_flat = yb.view(yb.shape[0], -1)
+                    _, predictions = torch.max(pred_flat, dim=1)
 
                     # compute accuracy (AUC)
-                    #auc_score = auc(pred.cpu().detach().numpy(), yb.cpu().detach().numpy())
-                    #print(auc_score)
-                    #total_auc += auc_score
+                    auc_score = auc(pred.cpu().detach().numpy(), yb.cpu().detach().numpy(), splits=10)
+                    print(auc_score)
+                    total_auc += auc_score
 
                     # Update counters
-                    total += yb.size(0)
-                    correct += (predictions == yb).sum().item()
+                    total += yb_flat.size(0)
+                    correct += (pred_flat == yb_flat).sum().item()
 
 
             # Calculate accuracy
@@ -195,14 +197,11 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'lr': optimizer.param_groups[0]['lr'],
-                    }, f"/export/scratch/9erekmen/sailancy_model/sailancy_model_epoch_{epoch}.pt"
+                    }, os.path.join(path, "sailancy_model/sailancy_model_epoch_{epoch}.pt")
                 )
 
 
 if __name__ == "__main__":
-    # create directory to save model
-    os.makedirs("/export/scratch/9erekmen/sailancy_model", exist_ok=True)
-    os.makedirs("/export/scratch/9erekmen/predictions", exist_ok=True)
 
     # parse args
     parser = argparse.ArgumentParser(
@@ -225,11 +224,26 @@ if __name__ == "__main__":
     parser.add_argument('--momentum', type=float, default=0.9, help='Opt momentum')
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for dataloader")
     parser.add_argument("--dropout_rate", type=float, default=0.3, help="Dropout rate for the model")
+    parser.add_argument("--remote_path", type=bool, default=False, help="Path to the remote directory.")
     args = parser.parse_args()
     
     # set seed for reproducibility
     seed(args.seed)
 
+    # create directory to save model and predictions, depending on the remote path
+    if args.remote_path:
+        remote_path = "/export/scratch/9erekmen"
+        remote_path_data = "/export/scratch/CV2"
+        sailancy_path = os.path.join(remote_path, "sailancy_model")
+        prediction_path = os.path.join(remote_path, "predictions")
+    else:
+        remote_path = os.getcwd()
+        remote_path_data = os.path.join(os.getcwd(), "cv2_project_data")
+        sailancy_path = os.path.join(remote_path, "sailancy_model")
+        prediction_path = os.path.join(remote_path, "predictions")
+    
+    os.makedirs(sailancy_path, exist_ok=True)
+    os.makedirs(prediction_path, exist_ok=True)
 
     wandb.init(
         project="Saliency-map",
@@ -247,6 +261,7 @@ if __name__ == "__main__":
         "seed": args.seed,
         "num_workers": args.num_workers,
         "dropout_rate": args.dropout_rate,
+        "remote_path": args.remote_path
         },
 
         mode = "online" if args.log else "disabled"
@@ -267,15 +282,15 @@ if __name__ == "__main__":
     # load model, optimizer and state dict
     if args.resume_training is not None: 
         print(f"Resuming training from epoch: {args.resume_training}; Loading Model: sailancy_model_epoch_{args.resume_training}")
-        checkpoint = torch.load(f"/export/scratch/9erekmen/sailancy_model/sailancy_model_epoch_{args.resume_training}.pt")
-        model = Eye_Fixation(args=args)
+        checkpoint = torch.load(os.path.join(remote_path, f"sailancy_model/sailancy_model_epoch_{args.resume_training}.pt"))
+        model = Eye_Fixation(args=args, path=remote_path_data)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer = optim.SGD(model.parameters(), lr=checkpoint['lr'], momentum=args.momentum)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         model = model.to(device)
         epochs = args.epochs - checkpoint['epoch']
     else: # create instance of model
-        model = Eye_Fixation()
+        model = Eye_Fixation(args=args)
         model = model.to(device)
         epochs = args.epochs
 
@@ -292,15 +307,15 @@ if __name__ == "__main__":
         v2.ToTensor() # convert the image to a tensor with values between 0 and 1
     ])
 
-    sailancy_train_dataset = FixationDataset(root_dir="/export/scratch/CV2", image_file="/export/scratch/CV2/train_images.txt", 
-						   fixation_file="/export/scratch/CV2/train_fixations.txt", image_transform=transform, fixation_transform=transform)
+    sailancy_train_dataset = FixationDataset(root_dir=remote_path_data, image_file=os.path.join(remote_path_data, "train_images.txt"), 
+						   fixation_file=os.path.join(remote_path_data, "train_fixations.txt"), image_transform=transform, fixation_transform=transform)
     
-    sailancy_val_dataset = FixationDataset(root_dir="/export/scratch/CV2", image_file="/export/scratch/CV2/val_images.txt", 
-						   fixation_file="/export/scratch/CV2/val_fixations.txt", image_transform=transform, fixation_transform=transform)
+    sailancy_val_dataset = FixationDataset(root_dir=remote_path_data, image_file=os.path.join(remote_path_data, "val_images.txt"), 
+						   fixation_file=os.path.join(remote_path_data, "val_fixations.txt"), image_transform=transform, fixation_transform=transform)
 
     # image and fixation are the same for the test dataset as there is no ground truth (fixation) for the test dataset
-    sailancy_test_dataset = FixationDataset(root_dir="/export/scratch/CV2", image_file="/export/scratch/CV2/test_images.txt", 
-						   fixation_file="/export/scratch/CV2/test_images.txt", image_transform=transform, fixation_transform=transform)
+    sailancy_test_dataset = FixationDataset(root_dir=remote_path_data, image_file=os.path.join(remote_path_data, "test_images.txt"), 
+						   fixation_file=os.path.join(remote_path_data, "test_images.txt"), image_transform=transform, fixation_transform=transform)
 
     
     assert args.num_workers < os.cpu_count(), "Number of workers cannot be more than the number of cores available and should be less than the number of cores available, because of balancing the load (cpu and gpu usage)."
@@ -329,11 +344,11 @@ if __name__ == "__main__":
     import time
     logger.info("Training the model.")
     start_time = time.time()
-    train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger)
+    train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger, remote_path)
     end_time = time.time()
 
     # evaluate the model
     logger.info("Evaluating the model.")
-    evaluate(model, data_loader_test, device, args)
+    evaluate(model, data_loader_test, device, args, remote_path)
 
     print(f"Runtime: {end_time - start_time} seconds")
