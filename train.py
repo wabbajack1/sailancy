@@ -54,7 +54,7 @@ def seed(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
-def evaluate(model, data_loader_test, device, args, path):
+def evaluate(model, data_loader_test, device, args, path, run_name):
     """Here in the evaluation function, we will evaluate the model on the test dataset. We cant calulate 
     the accuracy here as we dont have the ground truth in the test set. Hence we do:
 
@@ -96,9 +96,10 @@ def evaluate(model, data_loader_test, device, args, path):
     for step, pred in enumerate(tqdm(predictions_list)):
         # Extract the base name from the original image file name (without extension)
         base_name = os.path.splitext(os.path.basename(image_file_names[step]))[0]
+
         
         # Construct the new filename using the base name
-        new_filename = os.path.join(path, "predictions/prediction-{base_name}.png")
+        new_filename = os.path.join(path, "predictions/prediction-{base_name}-{run_name}.png")
         
         # Convert the prediction to a numpy array and save it as an image
         imageio.imwrite(new_filename, pred.squeeze(0).cpu().numpy()) # pred (1, 1, H, W)
@@ -170,7 +171,7 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
                     _, predictions = torch.max(pred_flat, dim=1)
 
                     # compute accuracy (AUC)
-                    auc_score = auc(pred.cpu().detach().numpy(), yb.cpu().detach().numpy(), splits=10)
+                    auc_score = auc(pred.cpu().detach().numpy(), yb.cpu().detach().numpy(), splits=100)
                     print(auc_score)
                     total_auc += auc_score
 
@@ -245,7 +246,7 @@ if __name__ == "__main__":
     os.makedirs(sailancy_path, exist_ok=True)
     os.makedirs(prediction_path, exist_ok=True)
 
-    wandb.init(
+    run = wandb.init(
         project="Saliency-map",
         
         # track hyperparameters and run metadata
@@ -349,6 +350,6 @@ if __name__ == "__main__":
 
     # evaluate the model
     logger.info("Evaluating the model.")
-    evaluate(model, data_loader_test, device, args, remote_path)
+    evaluate(model, data_loader_test, device, args, remote_path, run.name)
 
     print(f"Runtime: {end_time - start_time} seconds")
