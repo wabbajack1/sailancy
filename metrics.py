@@ -101,7 +101,7 @@ def auc_borji(s_map,gt,splits=100,stepsize=0.1):
 	for i in tqdm(random_numbers):
 		r_sal_map = []
 		for k in i:
-			r_sal_map.append(s_map[k%s_map.shape[0]-1, k//s_map.shape[0]])
+			r_sal_map.append(s_map[k%s_map.shape[2]-1, k//s_map.shape[2]])
 		# in these values, we need to find thresholds and calculate auc
 		thresholds = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
 
