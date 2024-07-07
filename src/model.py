@@ -3,6 +3,9 @@ from torchvision.models.segmentation import fcn_resnet50
 import numpy as np
 import wandb
 import os
+from torchvision.models import resnet50
+import torch.nn as nn
+
 def gaussian(window_size: int, sigma: float) -> torch.Tensor:
     device, dtype = None, None
     if isinstance(sigma, torch.Tensor):
@@ -19,19 +22,31 @@ class Eye_Fixation(torch.nn.Module):
         super(Eye_Fixation, self).__init__()
 
         # Freeze the backbone
-        self.model = fcn_resnet50(pretrained=True) # load the pre-trained model
-        self.dropout = torch.nn.Dropout(args.dropout_rate)
-        
-        # Modify the final classifier to have the desired number of classes
-        self.model.classifier[4] = torch.nn.Conv2d(512, 1, kernel_size=(1, 1), stride=(1, 1))
-        
-        for param in self.model.backbone.parameters():
-            param.requires_grad = False
+        resnet = resnet50(pretrained=True)
 
+        # Remove the fully connected layer (classification head)
+        self.backbone = nn.Sequential(*list(resnet.children())[:-2])
         
-        # set the backbone and classifier
-        self.backbone = self.model.backbone
-        self.decoder = self.model.classifier # pre-defined classifier is already full convolutional layer
+        self.decoder = nn.Sequential(
+            nn.Conv2d(2048, 512, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(512, 256, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, 8, kernel_size=2, stride=2),
+            nn.ReLU(),
+            nn.ConvTranspose2d(8, 1, kernel_size=2, stride=2)
+        )
+        
+        for param in self.backbone.parameters():
+            param.requires_grad = False
 
         # for post-processing
         self.window_size = window_size
@@ -42,6 +57,7 @@ class Eye_Fixation(torch.nn.Module):
         center_bias = torch.tensor(np.load(os.path.join(path, "center_bias_density.npy")))
         log_center_bias = torch.log(center_bias)
         self.center_bias = torch.nn.Parameter(log_center_bias)  # 224 depends on the input size
+        self.dropout = torch.nn.Dropout(args.dropout_rate)
 
         try:
             wandb.watch(self, log="all", log_freq=100)
@@ -49,14 +65,14 @@ class Eye_Fixation(torch.nn.Module):
             pass
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x_features = self.backbone(x)["out"]
+        x_features = self.backbone(x) # (B, 2048, H/32, W/32)
         x_features = self.dropout(x_features)
         x_decoded = self.decoder(x_features) # (B, 1, H/8, W/8)
         x_features = self.dropout(x_features)
         x = torch.nn.functional.interpolate(x_decoded, size=x.shape[-2:], mode='bilinear', align_corners=False)
 
         # post-processing raw decoder outputs
-        smoothed_output = torch.nn.functional.conv2d(x, self.weight_kernel.view(1, 1, self.window_size, self.window_size), padding=self.window_size // 2)
+        smoothed_output = torch.nn.functional.conv2d(x, self.weight_kernel.view(1, 1, self.window_size, self.window_size), padding="same")
         smoothed_output += self.center_bias
 
         return smoothed_output
@@ -67,7 +83,9 @@ class Eye_Fixation(torch.nn.Module):
 
 
 if __name__ == '__main__':
-    model = Eye_Fixation()
+    from argparse import Namespace
+    args = Namespace(dropout_rate=0.5)
+    model = Eye_Fixation(args=args)
     x = torch.randn(3, 3, 224, 224) # (B, C, H, W)
     out = model(x) # (B, 1, H, W)
     print(out.shape)
