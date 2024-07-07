@@ -27,6 +27,8 @@ import os
 from logging import getLogger
 import logging
 
+from metrics import auc_borji as auc
+
 # make a logger
 logger = getLogger(__name__)
 # Set up logger
@@ -50,117 +52,6 @@ def seed(seed=42):
     np.random.seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-
-def compute_auc(saliency_map, ground_truth, threshold=None):
-    """
-    Compute the Area Under the ROC Curve (AUC) for a saliency map. Salary maps and ground truth are expected to be in the same scale, i.e. [0, 1].
-
-    Args:
-    saliency_map (torch.Tensor): Predicted saliency map.
-    ground_truth (torch.Tensor): Ground truth saliency map (continuous values).
-
-    Returns:
-    float: AUC score.
-    """
-    # Flatten the saliency map and ground truth
-    print(saliency_map.shape, ground_truth.shape)
-    saliency_map_flat = saliency_map.view(-1).cpu().detach().numpy()
-    ground_truth_flat = ground_truth.view(-1).cpu().detach().numpy()
-
-    # Compute the threshold for the ground truth
-    # if threshold is None:
-    #     threshold = ground_truth_flat.mean().item()
-    # binary_ground_truth = (ground_truth_flat >= threshold).astype(float)
-
-    # Compute ROC curve and AUC
-    fpr, tpr, thresholds = roc_curve(ground_truth_flat, saliency_map_flat)
-    auc_score = auc(fpr, tpr)
-
-    return auc_score
-
-def AUC_Judd(saliencyMap, fixationMap, jitter=True, toPlot=False):
-    # saliencyMap is the saliency map
-    # fixationMap is the human fixation map (binary matrix)
-    # jitter=True will add tiny non-zero random constant to all map locations to ensure
-    # 		ROC can be calculated robustly (to avoid uniform region)
-    # if toPlot=True, displays ROC curve
-
-    # If there are no fixations to predict, return NaN
-    if not fixationMap.any():
-        print('Error: no fixationMap')
-        score = float('nan')
-        return score
-
-    # make the saliencyMap the size of the image of fixationMap
-    new_size = np.shape(fixationMap)
-    if not np.shape(saliencyMap) == np.shape(fixationMap):
-        #from scipy.misc import imresize
-        new_size = np.shape(fixationMap)
-        np.array(Image.fromarray(saliencyMap).resize((new_size[1], new_size[0])))
-
-        #saliencyMap = imresize(saliencyMap, np.shape(fixationMap))
-
-    # jitter saliency maps that come from saliency models that have a lot of zero values.
-    # If the saliency map is made with a Gaussian then it does not need to be jittered as
-    # the values are varied and there is not a large patch of the same value. In fact
-    # jittering breaks the ordering in the small values!
-    if jitter:
-        # jitter the saliency map slightly to distrupt ties of the same numbers
-        saliencyMap = saliencyMap + np.random.random(np.shape(saliencyMap)) / 10 ** 7
-
-    # normalize saliency map
-    saliencyMap = (saliencyMap - saliencyMap.min()) \
-                  / (saliencyMap.max() - saliencyMap.min())
-
-    if np.isnan(saliencyMap).all():
-        print('NaN saliencyMap')
-        score = float('nan')
-        return score
-
-    S = saliencyMap.flatten()
-    F = fixationMap.flatten()
-
-    Sth = S[F > 0]  # sal map values at fixation locations
-    Nfixations = len(Sth)
-    Npixels = len(S)
-
-    allthreshes = sorted(Sth, reverse=True)  # sort sal map values, to sweep through values
-    tp = np.zeros((Nfixations + 2))
-    fp = np.zeros((Nfixations + 2))
-    tp[0], tp[-1] = 0, 1
-    fp[0], fp[-1] = 0, 1
-
-    for i in range(Nfixations):
-        thresh = allthreshes[i]
-        aboveth = (S >= thresh).sum()  # total number of sal map values above threshold
-        tp[i + 1] = float(i + 1) / Nfixations  # ratio sal map values at fixation locations
-        # above threshold
-        fp[i + 1] = float(aboveth - i) / (Npixels - Nfixations)  # ratio other sal map values
-        # above threshold
-
-    score = np.trapz(tp, x=fp)
-    allthreshes = np.insert(allthreshes, 0, 0)
-    allthreshes = np.append(allthreshes, 1)
-
-    if toPlot:
-        import matplotlib.pyplot as plt
-        fig = plt.figure()
-        ax = fig.add_subplot(1, 2, 1)
-        ax.matshow(saliencyMap, cmap='gray')
-        ax.set_title('SaliencyMap with fixations to be predicted')
-        [y, x] = np.nonzero(fixationMap)
-        s = np.shape(saliencyMap)
-        plt.axis((-.5, s[1] - .5, s[0] - .5, -.5))
-        plt.plot(x, y, 'ro')
-
-        ax = fig.add_subplot(1, 2, 2)
-        plt.plot(fp, tp, '.b-')
-        ax.set_title('Area under ROC curve: ' + str(score))
-        plt.axis((0, 1, 0, 1))
-        plt.show()
-
-    return score
-
 
 
 def evaluate(model, data_loader_test, device, args):
@@ -223,6 +114,7 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
      # training loop
     
     step = 0
+    best_loss = float('inf')
     for epoch in range(epochs):
         model.train()
         print(f"Epoch: {epoch+1}")
@@ -242,11 +134,6 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
             optimizer.step()
             optimizer.zero_grad()
 
-            # compute accuracy (AUC)
-            # auc_score = compute_auc(torch.sigmoid(pred), yb)
-            # auc_score = AUC_Judd(pred.cpu().detach(), yb.cpu().detach(), jitter=True, toPlot=False)
-            # print(auc_score)
-
             if (step+1) % args.log_steps == 0:
                 print("Step:", step, "Loss:", loss.item())
                 
@@ -259,46 +146,57 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
                             "training/images/raw_image": [wandb.Image(grid_raw)],
                             "training/images/prediction": [wandb.Image(grid_prediction)]}, step=step)
         
-        correct = 0
-        total = 0
-        loss_val = 0
-        # evaluate after each epoch
-        logger.info("Validation of the model.")
-        with torch.no_grad():
-            for img in tqdm(data_loader_val):
-                xb = img["image"].to(device)
-                yb = img["fixation"].to(device)
 
-                # model prediction
-                pred = model(xb)
-                loss_val += loss_fcn(pred, yb)
+        # evaluate after after some epochs
+        if (epoch+1) % args.val_steps == 0:
+            logger.info("Validation of the model.")
+            correct = 0
+            total = 0
+            loss_val = 0
+            total_auc = 0
+            
+            model.eval()
+            with torch.no_grad():
+                for img in tqdm(data_loader_val):
+                    xb = img["image"].to(device)
+                    yb = img["fixation"].to(device)
 
-                predictions = torch.max(pred, dim=0)[0]
+                    # model prediction
+                    pred = model(xb)
+                    loss_val += loss_fcn(pred, yb)
 
-                # compute accuracy (AUC)
-                # auc_score = compute_auc(torch.sigmoid(pred), yb)
-                # auc_score = AUC_Judd(pred.cpu().detach(), yb.cpu().detach(), jitter=True, toPlot=False)
+                    _, predictions = torch.max(pred, dim=1)
 
-                # Update counters
-                total += yb.size(0)
-                correct += (predictions == yb).sum().item()
+                    # compute accuracy (AUC)
+                    #auc_score = auc(pred.cpu().detach().numpy(), yb.cpu().detach().numpy())
+                    #print(auc_score)
+                    #total_auc += auc_score
+
+                    # Update counters
+                    total += yb.size(0)
+                    correct += (predictions == yb).sum().item()
 
 
-        # Calculate accuracy
-        accuracy = correct / total
-        print(f"Accuracy: {accuracy:.4f}, Loss: {loss_val/total:.4f}")
-        wandb.log({"validation/accuracy": accuracy, "validation/loss": loss_val/total, "validation/auc": 0, "epoch": epoch+1}, step=step)
+            # Calculate accuracy
+            accuracy = correct / total
+            total_auc = total_auc / len(data_loader_val)
+            valid_loss = loss_val / len(data_loader_val)
 
-        print(f"Saving model after epoch {epoch}.")
-        # save model after each epoch
-        torch.save(
-            {
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'lr': optimizer.param_groups[0]['lr'],
-            }, f"/export/scratch/9erekmen/sailancy_model/sailancy_model_epoch_{epoch}.pt"
-        )
+            print(f"Accuracy: {accuracy:.4f}, Loss: {loss_val:.4f}, AUC: {total_auc:.4f}")
+            wandb.log({"validation/accuracy": accuracy, "validation/loss": valid_loss, "validation/auc": total_auc, "epoch": epoch+1}, step=step)
+
+            print(f"Saving model after epoch {epoch}.")
+            # save model after each epoch
+            if valid_loss < best_loss:
+                best_loss = valid_loss
+                torch.save(
+                    {
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'lr': optimizer.param_groups[0]['lr'],
+                    }, f"/export/scratch/9erekmen/sailancy_model/sailancy_model_epoch_{epoch}.pt"
+                )
 
 
 if __name__ == "__main__":
@@ -316,15 +214,17 @@ if __name__ == "__main__":
                     help='Choose device: cuda | mps | cpu.')
     parser.add_argument('--resume_training', type=int, default=None,
                     help='Resume training or not.')
-    parser.add_argument('--epochs', type=int, default=10,
+    parser.add_argument('--epochs', type=int, default=100,
                     help='Choose epochs')
-    parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
+    parser.add_argument('--lr', type=float, default=0.003, help='Learning rate')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--log', type=bool, default=False, help='Log to wandb')
     parser.add_argument('--log_steps', type=int, default=10, help='Log steps to wandb')
+    parser.add_argument("--val_steps", type=int, default=10, help="Validation steps (every n epochs)")
     parser.add_argument('--seed', type=int, default=123, help='Seed for reproducibility')
     parser.add_argument('--momentum', type=float, default=0.9, help='Opt momentum')
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for dataloader")
+    parser.add_argument("--dropout_rate", type=float, default=0.3, help="Dropout rate for the model")
     args = parser.parse_args()
     
     # set seed for reproducibility
@@ -345,7 +245,8 @@ if __name__ == "__main__":
         "log_steps": args.log_steps,
         "momentum": args.momentum,
         "seed": args.seed,
-        "num_workers": args.num_workers
+        "num_workers": args.num_workers,
+        "dropout_rate": args.dropout_rate,
         },
 
         mode = "online" if args.log else "disabled"
@@ -367,7 +268,7 @@ if __name__ == "__main__":
     if args.resume_training is not None: 
         print(f"Resuming training from epoch: {args.resume_training}; Loading Model: sailancy_model_epoch_{args.resume_training}")
         checkpoint = torch.load(f"/export/scratch/9erekmen/sailancy_model/sailancy_model_epoch_{args.resume_training}.pt")
-        model = Eye_Fixation()
+        model = Eye_Fixation(args=args)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer = optim.SGD(model.parameters(), lr=checkpoint['lr'], momentum=args.momentum)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
