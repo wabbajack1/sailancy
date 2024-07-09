@@ -54,7 +54,7 @@ def seed(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
-def evaluate(model, data_loader_test, device, args, path, run_name):
+def evaluate(model, data_loader_test, device, args, path, run_name, time):
     """Here in the evaluation function, we will evaluate the model on the test dataset. We cant calulate 
     the accuracy here as we dont have the ground truth in the test set. Hence we do:
 
@@ -99,7 +99,7 @@ def evaluate(model, data_loader_test, device, args, path, run_name):
 
         
         # Construct the new filename using the base name
-        new_filename = os.path.join(path, "predictions/prediction-{base_name}-{run_name}.png")
+        new_filename = os.path.join(path, f"predictions/prediction-{base_name}-{run_name}-{time}.png")
         
         # Convert the prediction to a numpy array and save it as an image
         imageio.imwrite(new_filename, pred.squeeze(0).cpu().numpy()) # pred (1, 1, H, W)
@@ -111,7 +111,7 @@ def evaluate(model, data_loader_test, device, args, path, run_name):
 
     
 
-def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger, path):
+def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger, path, name):
      # training loop
     
     step = 0
@@ -171,9 +171,9 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
                     _, predictions = torch.max(pred_flat, dim=1)
 
                     # compute accuracy (AUC)
-                    auc_score = auc(pred.cpu().detach().numpy(), yb.cpu().detach().numpy(), splits=100)
-                    print(auc_score)
-                    total_auc += auc_score
+                    # auc_score = auc(pred.cpu().detach().numpy(), yb.cpu().detach().numpy(), splits=100)
+                    # print(auc_score)
+                    # total_auc += auc_score
 
                     # Update counters
                     total += yb_flat.size(0)
@@ -198,7 +198,7 @@ def train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'lr': optimizer.param_groups[0]['lr'],
-                    }, os.path.join(path, "sailancy_model/sailancy_model_epoch_{epoch}.pt")
+                    }, os.path.join(path, f"sailancy_model/sailancy-model-name-{name}-epoch-{epoch}.pt")
                 )
 
 
@@ -341,15 +341,19 @@ if __name__ == "__main__":
     logger.info(f"Size of test dataloader: {len(data_loader_test)} Batches")
     logger.info(f"Number of cores for dataloader: {data_loader_train.num_workers}")
 
+    # add time for run
+    from datetime import datetime
+    time = datetime.now().strftime("%Y%m%d-%H%M%S")
+
     # train the model
     import time
     logger.info("Training the model.")
     start_time = time.time()
-    train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger, remote_path)
+    train(epochs, model, loss_fcn, optimizer, data_loader_train, data_loader_val, device, args, logger, remote_path, run.name)
     end_time = time.time()
 
     # evaluate the model
     logger.info("Evaluating the model.")
-    evaluate(model, data_loader_test, device, args, remote_path, run.name)
+    evaluate(model, data_loader_test, device, args, remote_path, run.name, time)
 
     print(f"Runtime: {end_time - start_time} seconds")
