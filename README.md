@@ -17,6 +17,12 @@ python train.py --batch_size=32 --device=cuda --dropout_rate=0.15018428136362405
 ```
 keep in mind that remote_path=True is for running on the clusters for the specific data path.
 
+you can run the wandb be agent for the sweep as
+```bash
+wandb agent agnostic/Saliency-map/${id}
+```
+id is the id of the sweep.
+
 ## Questions to answer in the report (maximum length 2 A4 pages)
 - What existing work is the system based on? Provide a reference to a paper.
   - If you made modifications compared to the reference work, please provide a brief summary of them (a few sentences).
