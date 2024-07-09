@@ -4,6 +4,7 @@ import os
 import torchvision
 import torch
 import torchvision.transforms as v2
+from matplotlib import pyplot as plt
 
 transform = v2.Compose([
     v2.ToTensor() # convert the image to a tensor with values between 0 and 1
@@ -54,3 +55,27 @@ if __name__ == "__main__":
 
 	for img in dataloader:
 		print(img["image"].shape, img["fixation"].shape, img["image"].dtype, img["fixation"].dtype)
+		print(img["image"], img["image"])
+
+		# plot the image and fixation map with its heatmap as well
+		fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+
+		# Plot the image
+		ax[0].imshow(img["image"][0].permute(1, 2, 0))
+		ax[0].set_title("Image")
+
+		# Plot the fixation map with its heatmap
+		ax[1].imshow(img["fixation"][0].permute(1, 2, 0), cmap='hot')
+		ax[1].set_title("Fixation Map")
+
+		# Add colorbar to the fixation map
+		cbar = plt.colorbar(ax[1].imshow(img["fixation"][0].permute(1, 2, 0), cmap='hot'), ax=ax[1])
+		cbar.ax.set_ylabel('Fixation Values')
+
+		# Add colorbar to the image
+		cbar = plt.colorbar(ax[0].imshow(img["image"][0].permute(1, 2, 0), cmap='hot'), ax=ax[0])
+		cbar.ax.set_ylabel('Image Values')
+
+		plt.show()
+
+		break

@@ -117,6 +117,7 @@ class Eye_Fixation(torch.nn.Module):
         # set the backbone and classifier
         self.backbone = model.backbone
         self.decoder = model.classifier # pre-defined classifier is already full convolutional layer
+        print(self.decoder)
 
         # for post-processing
         self.window_size = window_size
@@ -148,7 +149,7 @@ class Eye_Fixation(torch.nn.Module):
 
 if __name__ == '__main__':
     from argparse import Namespace
-    args = Namespace(dropout_rate=0.5)
+    args = Namespace(dropout_rate=0.2)
 
     model = Eye_Fixation(args)
     x = torch.randn(3, 3, 224, 224) # (B, C, H, W)
